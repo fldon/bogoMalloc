@@ -1,19 +1,16 @@
 #include "myalloc.h"
 #include <stdexcept>
-static MyAlloc globalAlloc;
 
 
 void* mm_malloc(std::size_t size)
 {
-    return globalAlloc.malloc(size);
+    return MyAlloc::get_object()->malloc(size);
 }
 
 void mm_free(void *ptr)
 {
-    globalAlloc.free(ptr);
+    MyAlloc::get_object()->free(ptr);
 }
-
-
 
 
 /*!

@@ -1,5 +1,6 @@
 #include "memlib.h"
 #include "DTools/MiscTools.h"
+#include "DTools/DTSingleton.h"
 #include <cstdint>
 #include <array>
 #include <cassert>
@@ -54,9 +55,9 @@ constexpr std::size_t MAX_BLOCK_ORDER = ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE
 
 
 /*!
- * \brief This is a segregatet-fits allocator that uses segregatet lists of powers of 2 up to MAX_BLOCK_SIZE.
+ * \brief This is a segregated-fits allocator that uses segregated lists of powers of 2 up to MAX_BLOCK_SIZE.
  */
-class MyAlloc
+class MyAlloc : public dtools::DTSingleton<MyAlloc>
 {
 public:
     static constexpr std::size_t CHUNKSIZE = 1 << 12; /*Extend heap by this amount (Bytes)*/
@@ -68,7 +69,6 @@ public:
     void free(void *ptr);
 
 private:
-
     int mm_init();
 
     [[nodiscard]] void* mem_map_slab(std::size_t incr);
