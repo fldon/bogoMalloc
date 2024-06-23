@@ -41,35 +41,47 @@ int MyAlloc::mm_init()
     }
 
 
+    return mm_request(MAX_BLOCK_SIZE);
+}
 
+int MyAlloc::mm_request(std::size_t request_size)
+{
+    BYTE *new_mem_ptr = reinterpret_cast<BYTE*>(mem_map_slab(request_size));
     //TODO: for now, just allocates one large block of max blocksize. Later, this should be replaced by mmap calls that do the same thing each time we need a new block.
-    if((heap_listp = reinterpret_cast<BYTE*> (mem_sbrk(MAX_BLOCK_SIZE))) == (BYTE*) - 1)
+    if(new_mem_ptr == (BYTE*) - 1)
         return -1;
 
 
     constexpr std::size_t ADMIN_OVERHEAD_SIZE = WSIZE + OVERHEAD_SIZE + HEADERSIZE; //size of padding, left boundary and right boundary together
     constexpr std::size_t LEFT_BOUNDARY_SIZE = OVERHEAD_SIZE + WSIZE;
 
+    //requested slab size does not make any sense; it's too small
+    if(request_size <= ADMIN_OVERHEAD_SIZE)
+    {
+        return -1;
+    }
+
     //put boundary blocks left and right of free space
-    PUT_WORD(heap_listp, 0); //Alignment padding for header,footer,and epilogue blocks ----- This assumes that header and footer are 1 WORD in size!
-    PUT_WORD(heap_listp + WSIZE, PACK(OVERHEAD_SIZE, 1)); //left boundary header
-    PUT_ADDRESS(heap_listp + WSIZE + HEADERSIZE, nullptr); //Address of nonexistant next block for prologue block TODO: check that PUT actually can put a whole DWORD/address here!
-    PUT_WORD(heap_listp + WSIZE + HEADERSIZE + SIZE_OF_ADDRESS, PACK(OVERHEAD_SIZE, 1)); //left boundary footer
-    PUT_WORD(heap_listp + MAX_BLOCK_SIZE - HEADERSIZE, PACK(0,1)); //Epilogue header
+    PUT_WORD(new_mem_ptr, 0); //Alignment padding for header,footer,and epilogue blocks ----- This assumes that header and footer are 1 WORD in size!
+    PUT_WORD(new_mem_ptr + WSIZE, PACK(OVERHEAD_SIZE, 1)); //left boundary header
+    PUT_ADDRESS(new_mem_ptr + WSIZE + HEADERSIZE, nullptr); //Address of nonexistant next block for prologue block TODO: check that PUT actually can put a whole DWORD/address here!
+    PUT_WORD(new_mem_ptr + WSIZE + HEADERSIZE + SIZE_OF_ADDRESS, PACK(OVERHEAD_SIZE, 1)); //left boundary footer
+    PUT_WORD(new_mem_ptr + request_size - HEADERSIZE, PACK(0,1)); //Epilogue header
 
 
-    BYTE* prevtop = mFreelists.at(MAX_BLOCK_ORDER - 1);
+    std::size_t remaining_free_block_size = request_size - ADMIN_OVERHEAD_SIZE;
 
-    std::size_t remaining_free_block_size = MAX_BLOCK_SIZE - ADMIN_OVERHEAD_SIZE;
+    BYTE* prevtop = mFreelists.at(blocksize_idx(remaining_free_block_size));
+
     //Create one large free block out of the rest of the memory. so starting from Fourth block to the second-to-last block
-    PUT_WORD(heap_listp + LEFT_BOUNDARY_SIZE, PACK(remaining_free_block_size, 0)); //block header
-    PUT_ADDRESS(heap_listp + LEFT_BOUNDARY_SIZE + HEADERSIZE, prevtop); //address of nonexistant next block
-    PUT_WORD(heap_listp + MAX_BLOCK_SIZE - HEADERSIZE - FOOTERSIZE, PACK(remaining_free_block_size, 0)); //block footer
+    PUT_WORD(new_mem_ptr + LEFT_BOUNDARY_SIZE, PACK(remaining_free_block_size, 0)); //block header
+    PUT_ADDRESS(new_mem_ptr + LEFT_BOUNDARY_SIZE + HEADERSIZE, prevtop); //address of nonexistant next block
+    PUT_WORD(new_mem_ptr + request_size - HEADERSIZE - FOOTERSIZE, PACK(remaining_free_block_size, 0)); //block footer
 
     //insert the aforementioned large free block into the largest size class of the free list array
-    BYTE* newtop = heap_listp + LEFT_BOUNDARY_SIZE + HEADERSIZE; //Block address of large free block (NOT HEADER ADDRESS!!)
+    BYTE* newtop = new_mem_ptr + LEFT_BOUNDARY_SIZE + HEADERSIZE; //Block address of large free block (NOT HEADER ADDRESS!!)
 
-    assert(HDRP(newtop) == heap_listp + LEFT_BOUNDARY_SIZE);
+    assert(HDRP(newtop) == new_mem_ptr + LEFT_BOUNDARY_SIZE);
     assert (!GET_ALLOC(HDRP(newtop)));
 
     mFreelists.at(blocksize_idx(remaining_free_block_size)) = newtop;
@@ -204,7 +216,7 @@ void* MyAlloc::malloc(std::size_t size)
     //If no fit can be found, allocate more memory using the memlib and put that new block on the free list (essentially the same as mm_init)
 
     /* Ignore spurious requests */
-    if(size == 0)
+    if(size == 0 || size > MAX_BLOCK_SIZE)
         return nullptr;
 
     BYTE *retp = nullptr;
@@ -224,9 +236,13 @@ void* MyAlloc::malloc(std::size_t size)
         return retp;
     }
 
-    //TODO: handle getting more memory in case no fit was found
-
-    return nullptr;
+    //handle getting more memory in case no fit was found
+    if(mm_request(MAX_BLOCK_SIZE) == -1)
+    {
+        return nullptr;
+    }
+    //try again if memory could be requested
+    return malloc(size);
 }
 
 /*!
@@ -235,6 +251,8 @@ void* MyAlloc::malloc(std::size_t size)
  */
 void MyAlloc::free(void *bp)
 {
+    //TODO: Add some way to check if the slab in which the currently freed block exists, can be unmapped
+
     //set header and footer to size of block and alloc bit set to 0:
     std::size_t size = GET_SIZE(HDRP(bp));
     PUT_WORD(HDRP(bp), PACK(size, 0));

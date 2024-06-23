@@ -71,6 +71,8 @@ private:
 
     int mm_init();
 
+    int mm_request(std::size_t size);
+
     /*Pack a size and allocated bit into a word*/
     //TODO: should this return ulonglongs, or just words?
     inline WORD PACK(WORD size, WORD alloc)
@@ -221,7 +223,5 @@ private:
     std::map<std::size_t, std::size_t> freelist_sizes{}; //Contains the size in bytes for every item in mFreelists
     [[nodiscard]] constexpr std::size_t blocksize_idx(std::size_t asize) const; //Gives index in mFreelists array for the size group that asize fits into
     void remove_from_freelist(BYTE* bptr); //Remove block with block pointer bptr from the free list given by idx in mFreelists
-
-    BYTE *heap_listp = nullptr; //Points to the beginning of the mapped area. TODO: this should at some point probabyl be a list: one pointer for each newly mmap-ed area (not used with sbrk)
 
 };

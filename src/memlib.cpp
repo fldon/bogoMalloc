@@ -38,3 +38,14 @@ void* mem_sbrk(std::size_t incr)
     mem_brk += incr;
     return reinterpret_cast<void*> (old_brk);
 }
+
+/*!
+ * \brief Maps memory for a slab of he size required by incr. Currently just uses sbrk. Is supposed to use mmap.
+ * \param incr
+ * \return
+ */
+void* mem_map_slab(std::size_t incr)
+{
+    //TODO: Change to mmap
+    return mem_sbrk(incr);
+}
