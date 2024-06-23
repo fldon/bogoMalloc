@@ -14,7 +14,7 @@ int main()
     mm_free(mem_to_fill);
 
 
-    constexpr std::size_t NUM_OF_ALLOCS_TO_TEST = 800000;
+    constexpr std::size_t NUM_OF_ALLOCS_TO_TEST = 1000000;
     constexpr int MAX_MALLOC_SIZE = 21440;
 
 

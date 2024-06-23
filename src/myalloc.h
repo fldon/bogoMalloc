@@ -2,7 +2,6 @@
 #include "DTools/MiscTools.h"
 #include <cstdint>
 #include <array>
-#include <map>
 #include <cassert>
 
 /*Allocator, which uses its own "heap-like" structure in virtual memory (using the classes provided by memlib)
@@ -53,9 +52,10 @@ constexpr std::size_t MAX_BLOCK_ORDER = ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE
  *
  * */
 
-//TODO make this class handle all allocation and freeing. And just call the member functions of a global object of this class when using the static mm_malloc and mm_free functions
-//This is a segregatet-fits allocator that uses segregatet lists of powers of 2 up to MAX_BLOCK_SIZE
-//Note that this is NOT a buddy allocator
+
+/*!
+ * \brief This is a segregatet-fits allocator that uses segregatet lists of powers of 2 up to MAX_BLOCK_SIZE.
+ */
 class MyAlloc
 {
 public:
@@ -63,7 +63,7 @@ public:
 
     MyAlloc();
 
-    void* malloc(std::size_t size);
+    [[nodiscard]] void* malloc(std::size_t size);
 
     void free(void *ptr);
 
@@ -71,11 +71,15 @@ private:
 
     int mm_init();
 
+    [[nodiscard]] void* mem_map_slab(std::size_t incr);
+
+    void mem_unmap_slab(void *start_of_slab, std::size_t size);
+
+
     int mm_request(std::size_t size);
 
     /*Pack a size and allocated bit into a word*/
-    //TODO: should this return ulonglongs, or just words?
-    inline WORD PACK(WORD size, WORD alloc)
+    [[nodiscard]] inline WORD PACK(WORD size, WORD alloc)
     {
         assert(!(size & 0x7) && size % DSIZE == 0); //size needs to be DWORD aligned (which also means it needs to be at least DSIZE)
         WORD result = size | alloc;
@@ -84,7 +88,7 @@ private:
 
     /* Read a word at address p */
     template<typename ptr>
-    WORD GET(ptr p)
+    [[nodiscard]] WORD GET(ptr p)
     {
         return *reinterpret_cast<WORD*> (p);
     }
@@ -103,63 +107,40 @@ private:
 
     /* Read the size and allocated fields from address p */
     template<typename PTR>
-    WORD GET_SIZE(PTR p)
+    [[nodiscard]] WORD GET_SIZE(PTR p)
     {
         return GET(p) & ~0x7;
     }
 
     //get allocated bit of ptr p (should be hdr or ftr pointer)
     template<typename PTR>
-    WORD GET_ALLOC(PTR p)
+    [[nodiscard]] WORD GET_ALLOC(PTR p)
     {
-        WORD test = GET(p);
         return GET(p) & 0x1;
     }
 
     /* Given block ptr bp, compute address of its header and footer*/
     template<typename PTR>
-    BYTE* HDRP(PTR bp)
+    [[nodiscard]] BYTE* HDRP(PTR bp)
     {
         return reinterpret_cast<BYTE*>(bp) - HEADERSIZE;
     }
 
     template<typename PTR>
-    BYTE* FTRP(PTR bp)
+    [[nodiscard]] BYTE* FTRP(PTR bp)
     {
         return reinterpret_cast<BYTE*>(bp) + GET_SIZE(HDRP(bp)) - HEADERSIZE - FOOTERSIZE;
     }
 
-
-    // Given block ptr bp, compute address of next and previous blocks
-    //TODO: this works with an IMPLICIT free list: change it to work with the explicit free lists I want to use!
-/*
-    template<typename PTR>
-    BYTE* NEXT_BLKP(PTR bp)
-    {
-        return reinterpret_cast<BYTE*>(bp) + GET_SIZE(reinterpret_cast<BYTE*>(bp) - WSIZE);
-    }
-    template<typename PTR>
-    BYTE* PREV_BLKP(PTR bp)
-    {
-        return reinterpret_cast<BYTE*>(bp) - GET_SIZE(reinterpret_cast<BYTE*>(bp) - DSIZE);
-    }
-*/
-
     // Given block ptr bp, compute address of next block in the explicit free list
     template<typename PTR>
-    BYTE* NEXT_BLKP(PTR bp)
+    [[nodiscard]] BYTE* NEXT_BLKP(PTR bp)
     {
         //Only free blocks have a next block!
         assert(!GET_ALLOC(HDRP(bp)));
 
         //Address of next block starts at first word after header
         BYTE *retval = *reinterpret_cast<BYTE* *> (HDRP(bp) + HEADERSIZE);
-
-        //TODO: remove this, it is just for findig a bug
-        assert((std::size_t)retval > (std::size_t)0x70000000000 || retval == nullptr);
-
-
-
         return retval;
     }
 
@@ -169,7 +150,7 @@ private:
      * \return
      */
     template<typename PTR>
-    BYTE* NEXT_BLKP_IMPL(PTR bp)
+    [[nodiscard]] BYTE* NEXT_BLKP_IMPL(PTR bp)
     {
         std::size_t blocksize = GET_SIZE(HDRP(bp));
 
@@ -187,7 +168,7 @@ private:
      * \return
      */
     template<typename PTR>
-    BYTE* PREV_BLKP_IMPL(PTR bp)
+    [[nodiscard]] BYTE* PREV_BLKP_IMPL(PTR bp)
     {
         std::size_t prev_blk_size = GET_SIZE(reinterpret_cast<BYTE*>(HDRP(bp)) - FOOTERSIZE); //get size from footer
         return reinterpret_cast<BYTE*>(HDRP(bp)) - prev_blk_size + HEADERSIZE;
@@ -215,13 +196,14 @@ private:
      */
     void place(void *const bp, std::size_t asize);
 
-    void* coalesce(void *bp);
+    [[nodiscard]] void* coalesce(void *bp);
 
     [[nodiscard]] BYTE* find_previous_block(void *bp);
 
-    std::array<BYTE*, MAX_BLOCK_ORDER + 1> mFreelists{}; //Free list for every order of 2-powers of the min block size (smallest block is order 0) - contains Block ponters, NOT HEADER POINTERS!!
-    std::map<std::size_t, std::size_t> freelist_sizes{}; //Contains the size in bytes for every item in mFreelists
-    [[nodiscard]] constexpr std::size_t blocksize_idx(std::size_t asize) const; //Gives index in mFreelists array for the size group that asize fits into
+    [[nodiscard]] constexpr std::size_t blocksize_to_freelist_idx(std::size_t asize) const; //Gives index in mFreelists array for the size group that asize fits into
+    [[nodiscard]] constexpr std::size_t freelist_idx_to_blocksize(std::size_t idx) const; //Gives size of size group for idx in mFreelist array
+
     void remove_from_freelist(BYTE* bptr); //Remove block with block pointer bptr from the free list given by idx in mFreelists
 
+    std::array<BYTE*, MAX_BLOCK_ORDER + 1> mFreelists{}; //Free list for every order of 2-powers of the min block size (smallest block is order 0) - contains Block ponters, NOT HEADER POINTERS!!
 };

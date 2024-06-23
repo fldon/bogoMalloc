@@ -6,5 +6,3 @@ static constexpr long long MAX_HEAP = (long long)3436 * 10000000 - 1; // Max num
 void mem_init();
 
 void* mem_sbrk(std::size_t incr);
-
-void* mem_map_slab(std::size_t incr);
