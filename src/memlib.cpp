@@ -4,7 +4,7 @@
 #include <cstdlib> //TODO: should be later removed
 
 
-//TODO: replace all of the sbrk and heap stuff with mutliple mmapped areas. Reason: one malloc call can only give you 32 gigs
+//TODO: replace all of the sbrk and heap stuff with mutliple mmapped areas.
 
 static BYTE *mem_heap; //first byte of heap
 static BYTE *mem_brk; //last byte of heap + 1
@@ -23,13 +23,12 @@ void mem_init()
 
 /*!
  * \brief extends the heap by incr bytes and returns the start address of the new area. Heap cannot be shrunk
- * TODO: potentially make heap shrinkable
  * */
 void* mem_sbrk(std::size_t incr)
 {
     BYTE *old_brk = mem_brk;
 
-    if( (incr < 0 || ((mem_brk + incr) >= mem_max_addr)) )
+    if( (((mem_brk + incr) >= mem_max_addr)) )
     {
         errno = ENOMEM;
         std::cerr << "ERROR: mem_sbrk failed. Ran out of memory\n";

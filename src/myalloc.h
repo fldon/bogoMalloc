@@ -8,7 +8,7 @@
 /*Allocator, which uses its own "heap-like" structure in virtual memory (using the classes provided by memlib)
  *this is so that this allocator does not interfere with the malloc provided by cstdlib.h (as replacing it outright would require the replacement of other contents in that header)*/
 
-void* mm_malloc(std::size_t size);
+[[nodiscard]] void* mm_malloc(std::size_t size);
 
 void mm_free(void *ptr);
 
@@ -60,8 +60,6 @@ constexpr std::size_t MAX_BLOCK_ORDER = ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE
 class MyAlloc : public dtools::DTSingleton<MyAlloc>
 {
 public:
-    static constexpr std::size_t CHUNKSIZE = 1 << 12; /*Extend heap by this amount (Bytes)*/
-
     MyAlloc();
 
     [[nodiscard]] void* malloc(std::size_t size);
