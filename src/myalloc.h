@@ -41,6 +41,9 @@ constexpr std::size_t OVERHEAD_SIZE = MIN_BLOCK_SIZE;
 //maximal block size in bytes. This is limited by the size field in the headers and footers. Currently those are 1 Word each. Includes size for header, footer and address of next block
 constexpr std::size_t MAX_BLOCK_SIZE = align_size_to_DWORD(UINT32_MAX - DSIZE);
 
+//Size of newly allocated slabs of memory by mmap
+constexpr std::size_t SLAB_SIZE = MAX_BLOCK_SIZE;
+
 constexpr std::size_t MAX_BLOCK_ORDER = ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE);
 
 
@@ -69,12 +72,12 @@ public:
 private:
     int mm_init();
 
-    [[nodiscard]] void* mem_map_slab(std::size_t incr);
+    [[nodiscard]] void* mem_map_slab();
 
-    void mem_unmap_slab(void *start_of_slab, std::size_t size);
+    void mem_unmap_slab(void *start_of_slab);
 
 
-    int mm_request(std::size_t size);
+    int mm_request_more_memory();
 
     /*Pack a size and allocated bit into a word*/
     [[nodiscard]] inline WORD PACK(WORD size, WORD alloc)
@@ -203,5 +206,7 @@ private:
 
     void remove_from_freelist(BYTE* bptr); //Remove block with block pointer bptr from the free list given by idx in mFreelists
 
-    std::array<BYTE*, MAX_BLOCK_ORDER + 1> mFreelists{}; //Free list for every order of 2-powers of the min block size (smallest block is order 0) - contains Block ponters, NOT HEADER POINTERS!!
+    std::array<BYTE*, MAX_BLOCK_ORDER + 1> m_free_lists{}; //Free list for every order of 2-powers of the min block size (smallest block is order 0) - contains Block ponters, NOT HEADER POINTERS!!
+
+    std::array<BYTE*, MAX_HEAP / SLAB_SIZE> m_slab_list{}; //List of pointers to first byte of every newly mapped slab of memory. Used for unmapping during coalescing.
 };

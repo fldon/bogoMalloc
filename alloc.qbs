@@ -1,4 +1,8 @@
+import qbs
 CppApplication {
+    //Uncomment to use asan
+    //Depends {name: "Sanitizers.address"}
+
     consoleApplication: true
     install: true
     files: [

@@ -44,6 +44,7 @@ int main()
         mm_free(ptr);
     }
 
+    /*
     //Test malloc
     std::vector<void*> ptrs2{NUM_OF_ALLOCS_TO_TEST, 0};
     for(std::size_t i = 0; i < NUM_OF_ALLOCS_TO_TEST; ++i)
@@ -58,7 +59,7 @@ int main()
         //Write the allocated pages full
         for(std::size_t j = 0; j < blocksize/sizeof(WORD); j++)
         {
-            //*(reinterpret_cast<WORD*> (currAlloc) + j) = rand();
+            // *(reinterpret_cast<WORD*> (currAlloc) + j) = rand();
         }
 
 
@@ -69,4 +70,5 @@ int main()
     {
         free(ptr);
     }
+    */
 }

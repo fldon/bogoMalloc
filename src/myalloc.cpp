@@ -28,22 +28,28 @@ MyAlloc::MyAlloc()
 int MyAlloc::mm_init()
 {
     mem_init();
-    return mm_request(MAX_BLOCK_SIZE);
+    return mm_request_more_memory();
 }
 
-int MyAlloc::mm_request(std::size_t request_size)
+/*!
+ * \brief Requests a new slab of memory of SLAB_SIZE, initializes it, and puts it on the free list
+ * \return
+ */
+int MyAlloc::mm_request_more_memory()
 {
-    BYTE *new_mem_ptr = reinterpret_cast<BYTE*>(mem_map_slab(request_size));
-    //TODO: for now, just allocates one large block of max blocksize. Later, this should be replaced by mmap calls that do the same thing each time we need a new block.
+    BYTE *new_mem_ptr = reinterpret_cast<BYTE*>(mem_map_slab());
+
     if(new_mem_ptr == (BYTE*) - 1)
         return -1;
+
+    //TODO: when mmap of slabs works correctly, this is the place where the new_mem_ptr needs to be but into the m_slab_list
 
 
     constexpr std::size_t ADMIN_OVERHEAD_SIZE = WSIZE + OVERHEAD_SIZE + HEADERSIZE; //size of padding, left boundary and right boundary together
     constexpr std::size_t LEFT_BOUNDARY_SIZE = OVERHEAD_SIZE + WSIZE;
 
     //requested slab size does not make any sense; it's too small
-    if(request_size <= ADMIN_OVERHEAD_SIZE)
+    if(SLAB_SIZE <= ADMIN_OVERHEAD_SIZE)
     {
         return -1;
     }
@@ -53,17 +59,17 @@ int MyAlloc::mm_request(std::size_t request_size)
     PUT_WORD(new_mem_ptr + WSIZE, PACK(OVERHEAD_SIZE, 1)); //left boundary header
     PUT_ADDRESS(new_mem_ptr + WSIZE + HEADERSIZE, nullptr); //Address of nonexistant next block for prologue block TODO: check that PUT actually can put a whole DWORD/address here!
     PUT_WORD(new_mem_ptr + WSIZE + HEADERSIZE + SIZE_OF_ADDRESS, PACK(OVERHEAD_SIZE, 1)); //left boundary footer
-    PUT_WORD(new_mem_ptr + request_size - HEADERSIZE, PACK(0,1)); //Epilogue header
+    PUT_WORD(new_mem_ptr + SLAB_SIZE - HEADERSIZE, PACK(0,1)); //Epilogue header
 
 
-    std::size_t remaining_free_block_size = request_size - ADMIN_OVERHEAD_SIZE;
+    std::size_t remaining_free_block_size = SLAB_SIZE - ADMIN_OVERHEAD_SIZE;
 
-    BYTE* prevtop = mFreelists.at(blocksize_to_freelist_idx(remaining_free_block_size));
+    BYTE* prevtop = m_free_lists.at(blocksize_to_freelist_idx(remaining_free_block_size));
 
     //Create one large free block out of the rest of the memory. so starting from Fourth block to the second-to-last block
     PUT_WORD(new_mem_ptr + LEFT_BOUNDARY_SIZE, PACK(remaining_free_block_size, 0)); //block header
     PUT_ADDRESS(new_mem_ptr + LEFT_BOUNDARY_SIZE + HEADERSIZE, prevtop); //address of nonexistant next block
-    PUT_WORD(new_mem_ptr + request_size - HEADERSIZE - FOOTERSIZE, PACK(remaining_free_block_size, 0)); //block footer
+    PUT_WORD(new_mem_ptr + SLAB_SIZE - HEADERSIZE - FOOTERSIZE, PACK(remaining_free_block_size, 0)); //block footer
 
     //insert the aforementioned large free block into the largest size class of the free list array
     BYTE* newtop = new_mem_ptr + LEFT_BOUNDARY_SIZE + HEADERSIZE; //Block address of large free block (NOT HEADER ADDRESS!!)
@@ -71,7 +77,7 @@ int MyAlloc::mm_request(std::size_t request_size)
     assert(HDRP(newtop) == new_mem_ptr + LEFT_BOUNDARY_SIZE);
     assert (!GET_ALLOC(HDRP(newtop)));
 
-    mFreelists.at(blocksize_to_freelist_idx(remaining_free_block_size)) = newtop;
+    m_free_lists.at(blocksize_to_freelist_idx(remaining_free_block_size)) = newtop;
 
     return 0;
 }
@@ -82,10 +88,10 @@ int MyAlloc::mm_request(std::size_t request_size)
  * \param incr
  * \return
  */
-void* MyAlloc::mem_map_slab(std::size_t incr)
+void* MyAlloc::mem_map_slab()
 {
     //TODO: Change to mmap
-    return mem_sbrk(incr);
+    return mem_sbrk(SLAB_SIZE);
 }
 
 
@@ -102,12 +108,12 @@ void *MyAlloc::find_fit(std::size_t asize)
 
     //go through freelists and check:
     //1. if the size class of that list is large enough
-    for(std::size_t i = 0; i < mFreelists.size(); ++i)
+    for(std::size_t i = 0; i < m_free_lists.size(); ++i)
     {
         if(freelist_idx_to_blocksize(i) >= asize) //Is size class big enough to fit asize?
         {
             //2. go through that list if the size class and see if a fit can be found in that specific explicit free list
-            ret = find_fit_in_list(mFreelists.at(i), asize);
+            ret = find_fit_in_list(m_free_lists.at(i), asize);
             if(ret != nullptr)
             {
                 return ret;
@@ -185,7 +191,7 @@ void MyAlloc::place(void *const bp, std::size_t asize)
         //Split off free block to the right
         //BYTE* splitblockp = reinterpret_cast<BYTE*>(HDRP(bp) + GET_SIZE(HDRP(bp)) + HEADERSIZE);
         BYTE *splitblockp = NEXT_BLKP_IMPL(bp);
-        BYTE* prevtop_b = mFreelists.at(blocksize_to_freelist_idx(bsize));
+        BYTE* prevtop_b = m_free_lists.at(blocksize_to_freelist_idx(bsize));
         PUT_WORD(HDRP(splitblockp), PACK(bsize,0)); //Header of split block
         PUT_ADDRESS(HDRP(splitblockp) + HEADERSIZE, prevtop_b); //next Address block of split block
         PUT_WORD(HDRP(splitblockp) + HEADERSIZE + SIZE_OF_ADDRESS, PACK(bsize, 0)); //Footer of split block
@@ -194,7 +200,7 @@ void MyAlloc::place(void *const bp, std::size_t asize)
         assert(NEXT_BLKP_IMPL(bp) ==  splitblockp);
 
         //insert new free split-block into correct explicit free list
-        mFreelists.at(blocksize_to_freelist_idx(bsize)) = reinterpret_cast<BYTE*> (splitblockp);
+        m_free_lists.at(blocksize_to_freelist_idx(bsize)) = reinterpret_cast<BYTE*> (splitblockp);
     }
     else
     {
@@ -236,7 +242,7 @@ void* MyAlloc::malloc(std::size_t size)
     }
 
     //handle getting more memory in case no fit was found
-    if(mm_request(MAX_BLOCK_SIZE) == -1)
+    if(mm_request_more_memory() == -1)
     {
         return nullptr;
     }
@@ -263,9 +269,9 @@ void MyAlloc::free(void *bp)
     assert((std::size_t)bp > (std::size_t)0x70000000000);
 
     //insert newly-freed block into correct explicit free list, and insert correct address block into freed block
-    BYTE* prevtop = mFreelists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
+    BYTE* prevtop = m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
     PUT_ADDRESS(HDRP(bp) + HEADERSIZE, prevtop); //address of potentially nonenxistant next block
-    mFreelists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp)))) = reinterpret_cast<BYTE*>(bp);
+    m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp)))) = reinterpret_cast<BYTE*>(bp);
 }
 
 /*!
@@ -363,7 +369,7 @@ void MyAlloc::remove_from_freelist(BYTE* bptr)
     BYTE *newtop = NEXT_BLKP(bptr);
 
     std::size_t idx = blocksize_to_freelist_idx(GET_SIZE(HDRP(bptr)));
-    mFreelists.at(idx) = newtop;
+    m_free_lists.at(idx) = newtop;
 }
 
 /*!
@@ -373,7 +379,7 @@ void MyAlloc::remove_from_freelist(BYTE* bptr)
  */
 BYTE* MyAlloc::find_previous_block(void *bp)
 {
-    BYTE *currptr = mFreelists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
+    BYTE *currptr = m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
     if(currptr == bp)
     {
         return nullptr;
