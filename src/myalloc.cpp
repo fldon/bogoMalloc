@@ -1,5 +1,7 @@
 #include "myalloc.h"
 #include <stdexcept>
+#include <unistd.h>
+#include <sys/mman.h>
 
 
 void* mm_malloc(std::size_t size)
@@ -27,7 +29,6 @@ MyAlloc::MyAlloc()
  */
 int MyAlloc::mm_init()
 {
-    mem_init();
     return mm_request_more_memory();
 }
 
@@ -42,8 +43,9 @@ int MyAlloc::mm_request_more_memory()
     if(new_mem_ptr == (BYTE*) - 1)
         return -1;
 
-    //TODO: when mmap of slabs works correctly, this is the place where the new_mem_ptr needs to be but into the m_slab_list
-
+    //Put newly mapped memory on top of list of slabs
+    m_slab_list.at(m_slab_list_top_idx) = new_mem_ptr;
+    ++m_slab_list_top_idx;
 
     constexpr std::size_t ADMIN_OVERHEAD_SIZE = WSIZE + OVERHEAD_SIZE + HEADERSIZE; //size of padding, left boundary and right boundary together
     constexpr std::size_t LEFT_BOUNDARY_SIZE = OVERHEAD_SIZE + WSIZE;
@@ -91,7 +93,9 @@ int MyAlloc::mm_request_more_memory()
 void* MyAlloc::mem_map_slab()
 {
     //TODO: Change to mmap
-    return mem_sbrk(SLAB_SIZE);
+    //return mem_sbrk(SLAB_SIZE);
+    void *retval = mmap(NULL, SLAB_SIZE, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
+    return retval;
 }
 
 
@@ -256,7 +260,8 @@ void* MyAlloc::malloc(std::size_t size)
  */
 void MyAlloc::free(void *bp)
 {
-    //TODO: Add some way to check if the slab in which the currently freed block exists, can be unmapped
+    //TODO: Add some way to check if the slab in which the currently freed block exists, can be unmapped; then unmap it if so
+    //TODO: for this, use m_slab_list
 
     //set header and footer to size of block and alloc bit set to 0:
     std::size_t size = GET_SIZE(HDRP(bp));

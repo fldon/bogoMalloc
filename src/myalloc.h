@@ -1,4 +1,3 @@
-#include "memlib.h"
 #include "DTools/MiscTools.h"
 #include "DTools/DTSingleton.h"
 #include <cstdint>
@@ -13,6 +12,10 @@
 void mm_free(void *ptr);
 
 /*Basic constants and macros*/
+
+using BYTE = unsigned char;
+
+static constexpr long long MAX_HEAP = (long long)3436 * 10000000 - 1; // Max number of BYTES in the heap(!) Currently 32 GiB, should be increased as much as reasonably possible
 
 using WORD = uint32_t;
 using DWORD = uint64_t;
@@ -209,4 +212,5 @@ private:
     std::array<BYTE*, MAX_BLOCK_ORDER + 1> m_free_lists{}; //Free list for every order of 2-powers of the min block size (smallest block is order 0) - contains Block ponters, NOT HEADER POINTERS!!
 
     std::array<BYTE*, MAX_HEAP / SLAB_SIZE> m_slab_list{}; //List of pointers to first byte of every newly mapped slab of memory. Used for unmapping during coalescing.
+    std::array<BYTE*, MAX_HEAP / SLAB_SIZE>::size_type m_slab_list_top_idx{0};
 };
