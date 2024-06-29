@@ -2,18 +2,7 @@
 #include <stdexcept>
 #include <unistd.h>
 #include <sys/mman.h>
-
-
-void* mm_malloc(std::size_t size)
-{
-    return MyAlloc::get_object()->malloc(size);
-}
-
-void mm_free(void *ptr)
-{
-    MyAlloc::get_object()->free(ptr);
-}
-
+#include <algorithm>
 
 /*!
  * \brief MyAlloc::MyAlloc
@@ -38,33 +27,30 @@ int MyAlloc::mm_init()
  */
 int MyAlloc::mm_request_more_memory()
 {
+    //Cannot fit more slabs into the slab list
+    if(m_slab_list_top_idx == m_slab_list.size())
+    {
+        return -1;
+    }
+
     BYTE *new_mem_ptr = reinterpret_cast<BYTE*>(mem_map_slab());
 
-    if(new_mem_ptr == (BYTE*) - 1)
+    if(new_mem_ptr == reinterpret_cast<BYTE*>(-1))
         return -1;
 
     //Put newly mapped memory on top of list of slabs
     m_slab_list.at(m_slab_list_top_idx) = new_mem_ptr;
     ++m_slab_list_top_idx;
 
-    constexpr std::size_t ADMIN_OVERHEAD_SIZE = WSIZE + OVERHEAD_SIZE + HEADERSIZE; //size of padding, left boundary and right boundary together
-    constexpr std::size_t LEFT_BOUNDARY_SIZE = OVERHEAD_SIZE + WSIZE;
-
-    //requested slab size does not make any sense; it's too small
-    if(SLAB_SIZE <= ADMIN_OVERHEAD_SIZE)
-    {
-        return -1;
-    }
-
     //put boundary blocks left and right of free space
     PUT_WORD(new_mem_ptr, 0); //Alignment padding for header,footer,and epilogue blocks ----- This assumes that header and footer are 1 WORD in size!
     PUT_WORD(new_mem_ptr + WSIZE, PACK(OVERHEAD_SIZE, 1)); //left boundary header
-    PUT_ADDRESS(new_mem_ptr + WSIZE + HEADERSIZE, nullptr); //Address of nonexistant next block for prologue block TODO: check that PUT actually can put a whole DWORD/address here!
+    PUT_ADDRESS(new_mem_ptr + WSIZE + HEADERSIZE, nullptr); //Address of nonexistant next block for prologue block
     PUT_WORD(new_mem_ptr + WSIZE + HEADERSIZE + SIZE_OF_ADDRESS, PACK(OVERHEAD_SIZE, 1)); //left boundary footer
     PUT_WORD(new_mem_ptr + SLAB_SIZE - HEADERSIZE, PACK(0,1)); //Epilogue header
 
 
-    std::size_t remaining_free_block_size = SLAB_SIZE - ADMIN_OVERHEAD_SIZE;
+    constexpr std::size_t remaining_free_block_size = MAX_BLOCK_SIZE;
 
     BYTE* prevtop = m_free_lists.at(blocksize_to_freelist_idx(remaining_free_block_size));
 
@@ -92,22 +78,23 @@ int MyAlloc::mm_request_more_memory()
  */
 void* MyAlloc::mem_map_slab()
 {
-    //TODO: Change to mmap
-    //return mem_sbrk(SLAB_SIZE);
     void *retval = mmap(NULL, SLAB_SIZE, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
     return retval;
 }
 
-
-/*Implements a first-fit search of the explicit free lists. Returns the Block pointer to a free block if found (NOT THE HEADER POINTER!)*/
+/*!
+    * \brief finds a fitting block with a free payload size of at least asize - might be more.
+    * \param asize
+    * \return a pointer to the beginning of the payload block or nullptr
+    */
 void *MyAlloc::find_fit(std::size_t asize)
 {
     //return immediately if asize is larger than largest possible block size (including overhead and alignment reqs)
     if(asize >= MAX_BLOCK_SIZE)
         return nullptr;
 
-   //Idea: go through all free lists: then check every header until one has the required size
-   //if found: return pointer to the data block of the block with that header
+    //Idea: go through all free lists: then check every header until one has the required size
+    //if found: return pointer to the data block of the block with that header
     BYTE *ret = nullptr;
 
     //go through freelists and check:
@@ -151,10 +138,12 @@ BYTE* MyAlloc::find_fit_in_list(BYTE* ptr, std::size_t asize)
     return ret;
 }
 
-/*place requested block of given size at beginning of free block bp (which is known to have enough size to fit a block (including overhead) of asize)
- * asize is the TOTAL size of the block with overhead
- * Split block bp if remainder would be equal or larger than minimum block size
- * */
+/*!
+     * \brief "places" or reserves contents of size asize in the block given by bp (which is known to have enough size to fit a block (including overhead) of asize).
+     * Split block bp if remainder would be equal or larger than minimum block size.
+     * \param bp
+     * \param asize is the TOTAL size of the block with overhead.
+     */
 void MyAlloc::place(void *const bp, std::size_t asize)
 {
     //Assume at this point: asize is DWORD-aligned!
@@ -211,6 +200,7 @@ void MyAlloc::place(void *const bp, std::size_t asize)
         PUT_WORD(reinterpret_cast<WORD*>(HDRP(bp)), PACK(non_split_size,1));
         PUT_WORD(FTRP(bp), PACK(non_split_size, 1));
     }
+    consecutive_frees = 0;
 }
 
 /*!
@@ -220,25 +210,22 @@ void MyAlloc::place(void *const bp, std::size_t asize)
  */
 void* MyAlloc::malloc(std::size_t size)
 {
-    //TODO: find fit (using find_fit, duh) and create block out of found block (split beforehand inside place function)
-    //Obviously, also remove the block from the free list after allocating it
-    //If no fit can be found, allocate more memory using the memlib and put that new block on the free list (essentially the same as mm_init)
+    //find fit (using find_fit, duh) and create block out of found block (split beforehand inside place function)
+    //also remove the block from the free list after allocating it
+    //If no fit can be found, allocate a new memory slab and put that new block on the free list
 
     /* Ignore spurious requests */
     if(size == 0 || size > MAX_BLOCK_SIZE)
         return nullptr;
 
-    BYTE *retp = nullptr;
+    void *retp = nullptr;
 
     /* Adjust block size to include overhead and DWORD alignment requirements */
-    //TODO: Do I need to check for case of size < DSIZE specifically?
-    std::size_t asize;
-    //asize = DSIZE * ((OVERHEAD_SIZE + size + (DSIZE-1)) / DSIZE);
-    asize = align_size_to_DWORD(OVERHEAD_SIZE + size);
+    std::size_t asize = align_size_to_DWORD(OVERHEAD_SIZE + size);
 
 
     /*Search the free lists for a fit */
-    retp = reinterpret_cast<BYTE*>(find_fit(asize));
+    retp = find_fit(asize);
     if(retp != nullptr)
     {
         place(retp, asize);
@@ -251,7 +238,12 @@ void* MyAlloc::malloc(std::size_t size)
         return nullptr;
     }
     //try again if memory could be requested
-    return malloc(size);
+    retp = malloc(size);
+
+    //At this point this should not be possible; request was reasonable and we got a full new slab
+    assert(retp != nullptr);
+
+    return retp;
 }
 
 /*!
@@ -260,9 +252,6 @@ void* MyAlloc::malloc(std::size_t size)
  */
 void MyAlloc::free(void *bp)
 {
-    //TODO: Add some way to check if the slab in which the currently freed block exists, can be unmapped; then unmap it if so
-    //TODO: for this, use m_slab_list
-
     //set header and footer to size of block and alloc bit set to 0:
     std::size_t size = GET_SIZE(HDRP(bp));
     PUT_WORD(HDRP(bp), PACK(size, 0));
@@ -270,13 +259,20 @@ void MyAlloc::free(void *bp)
     //Coalesce as far as possible
     bp = coalesce(bp);
 
-    //TODO: remove this, it's just for findign a bug
-    assert((std::size_t)bp > (std::size_t)0x70000000000);
-
     //insert newly-freed block into correct explicit free list, and insert correct address block into freed block
     BYTE* prevtop = m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
     PUT_ADDRESS(HDRP(bp) + HEADERSIZE, prevtop); //address of potentially nonenxistant next block
     m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp)))) = reinterpret_cast<BYTE*>(bp);
+
+    ++total_frees;
+    ++consecutive_frees;
+
+    //Unmapping policy: Enough consecutive free calls or free calls in total
+    if((total_frees % CHECK_UNMAP_TOTAL_NUM == 0) || consecutive_frees % CHECK_UNMAP_CONSEQ_NUM == 0)
+    {
+        void *slabp = get_slab_for_block(bp);
+        unmap_slab_if_unused(slabp);
+    }
 }
 
 /*!
@@ -288,8 +284,8 @@ void* MyAlloc::coalesce(void *bp)
 {
     //Coalesce blocks left and right according to the 4 cases in the book
     //However, the header of the resulting block must be followed by an (empty) address block
-    WORD prev_alloc = GET_ALLOC(FTRP(PREV_BLKP_IMPL(bp)));
-    WORD next_alloc = GET_ALLOC(FTRP(NEXT_BLKP_IMPL(bp)));
+    WORD prev_alloc = GET_ALLOC(HDRP(PREV_BLKP_IMPL(bp)));
+    WORD next_alloc = GET_ALLOC(HDRP(NEXT_BLKP_IMPL(bp)));
     std::size_t size = GET_SIZE(HDRP(bp));
 
     if(prev_alloc && next_alloc) //case 1, no coalescing possible
@@ -297,7 +293,7 @@ void* MyAlloc::coalesce(void *bp)
         return bp;
     }
 
-    else if (prev_alloc && !next_alloc) //case 2, right block coalesced
+    if (prev_alloc && !next_alloc) //case 2, right block coalesced
     {
         //remove right free block from the correct free list
         BYTE *right_block = reinterpret_cast<BYTE*>(NEXT_BLKP_IMPL(bp));
@@ -337,14 +333,10 @@ void* MyAlloc::coalesce(void *bp)
     return bp;
 }
 
-/*!
- * Gives index in mFreelists array for the size group that asize fits into
- * \param asize
- * \return
- */
+/*
 constexpr std::size_t MyAlloc::blocksize_to_freelist_idx(std::size_t asize) const
 {
-    unsigned int reduced_log_idx = ceillog2(asize /  MIN_BLOCK_SIZE);
+    unsigned int reduced_log_idx = dtools::ceillog2(asize /  MIN_BLOCK_SIZE);
 
     assert(reduced_log_idx <= MAX_BLOCK_ORDER);
 
@@ -353,8 +345,9 @@ constexpr std::size_t MyAlloc::blocksize_to_freelist_idx(std::size_t asize) cons
 
 constexpr std::size_t MyAlloc::freelist_idx_to_blocksize(std::size_t idx) const
 {
-        return MIN_BLOCK_SIZE << idx;
+    return MIN_BLOCK_SIZE << idx;
 }
+*/
 
 /*!
  * \brief Remove block with block pointer bptr from the appropriate explicit free list for its size
@@ -384,7 +377,8 @@ void MyAlloc::remove_from_freelist(BYTE* bptr)
  */
 BYTE* MyAlloc::find_previous_block(void *bp)
 {
-    BYTE *currptr = m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
+    std::size_t idx = blocksize_to_freelist_idx(GET_SIZE(HDRP(bp)));
+    BYTE *currptr = m_free_lists.at(idx);
     if(currptr == bp)
     {
         return nullptr;
@@ -398,4 +392,70 @@ BYTE* MyAlloc::find_previous_block(void *bp)
         currptr = NEXT_BLKP(currptr);
     }
     throw std::runtime_error("Block to be found is not in free list");
+}
+
+/*!
+ * \brief Returns ptr to the start of the memory slab that the block pointed to by the input parameter is located inside.
+ * Throws if the pointer is outside of any of the mapped slabs.
+ * Behavior is undefined is the slab was previously removed from slab list - in which case calling this function must be a mistake.
+ * \param blockpointer
+ * \return
+ */
+void* MyAlloc::get_slab_for_block(void *blockpointer)
+{
+    //take the maximum slab ptr in the slab list that is smaller than bp. Assuming nothing went wrong earlier, this MUST be the correct slab.
+    //Slab MUST NOT be removed from list before doing this otherwise behavior is undefined!
+    if(m_slab_list.empty())
+    {
+        throw std::runtime_error("No slab was mapped. Function call must be erroneous as there can exist no valid blockpointer.");
+    }
+    BYTE *slab_candidate = nullptr;
+    for(BYTE* &slabptr : m_slab_list)
+    {
+        //Assume that the slab list is filled starting from the front: all nullptrs are at the back! That means we are done!
+        if(slabptr == nullptr)
+        {
+            break;
+        }
+        if(slabptr > slab_candidate && slabptr < blockpointer)
+        {
+            slab_candidate = slabptr;
+        }
+    }
+
+    if(slab_candidate == nullptr)
+    {
+        throw std::runtime_error("Supplied block pointer does not lie in any mapped slab range and cannot be valid!");
+    }
+
+    return slab_candidate;
+}
+
+/*!
+ * \brief Checks if the slab pointed to by the input parameter contains only free blocks. If so, removes all free blocks from the lists and unmaps the slab.
+ * Behavior is undefined if slab_ptr does not point to the start of a slab!
+ * \param slab_ptr
+ */
+void MyAlloc::unmap_slab_if_unused(void *slab_ptr)
+{
+    //Assume that a completely free slab MUST contain ONE SINGLE block of maximum size (after all, every free-call coalesces them!)
+    //Then only check for blocksize of first block: if maximum, remove that block and unmap the slab
+    BYTE *first_bp = reinterpret_cast<BYTE*>(slab_ptr) + LEFT_BOUNDARY_SIZE + HEADERSIZE;
+
+    if(GET_SIZE(HDRP(first_bp)) == MAX_BLOCK_SIZE)
+    {
+        remove_from_freelist(first_bp);
+        if(munmap(slab_ptr, SLAB_SIZE) != 0)
+        {
+            throw std::runtime_error("Munmap error!");
+        }
+        //remove slab_ptr from m_slab_list
+        auto removedIt = std::remove(m_slab_list.begin(), m_slab_list.end(), slab_ptr);
+
+        //There had to be a slab in the map to remove at this point, otherwise a wizard is at work
+        assert(removedIt != m_slab_list.end());
+
+        *removedIt = nullptr;
+        --m_slab_list_top_idx;
+    }
 }

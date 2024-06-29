@@ -4,19 +4,24 @@
 #include <array>
 #include <cassert>
 
-/*Allocator, which uses its own "heap-like" structure in virtual memory (using the classes provided by memlib)
- *this is so that this allocator does not interfere with the malloc provided by cstdlib.h (as replacing it outright would require the replacement of other contents in that header)*/
+/*Allocator, which uses its own mmapp-ed memory arenas to administrate the virtual memory. This way it does not interfere with malloc
+All memory blocks are DWORD-aligned */
 
-[[nodiscard]] void* mm_malloc(std::size_t size);
-
-void mm_free(void *ptr);
+/*
+ * Structure of the explicit free lists:
+ * HEADER (1 WORD)
+ * NEXTBLK (SIZE_OF_ADDRESS)
+ * FOOTER(1 WORD)
+ *
+ *
+ * */
 
 /*Basic constants and macros*/
-
 using BYTE = unsigned char;
 
-static constexpr long long MAX_HEAP = (long long)3436 * 10000000 - 1; // Max number of BYTES in the heap(!) Currently 32 GiB, should be increased as much as reasonably possible
+static constexpr long long MAX_HEAP = ((long long)3436 * 10000000 * 32) - 1; // Max number of BYTES in the heap(!) Currently 32 * 32 GiB, should be increased as much as reasonably possible
 
+//TODO: Maybe use DWORDS everywhere. After all, nobody uses 32 bit machines anymore and it would mean that the max block size would increase
 using WORD = uint32_t;
 using DWORD = uint64_t;
 
@@ -28,36 +33,56 @@ constexpr std::size_t FOOTERSIZE = HEADERSIZE;
 
 constexpr long long SIZE_OF_ADDRESS = sizeof(intptr_t); //size of addresses in bytes
 
-constexpr std::size_t MIN_BLOCK_SIZE = DSIZE + SIZE_OF_ADDRESS; //min block size in bytes INCLUDING header and footer (so min block does not include a payload!)
+constexpr std::size_t MIN_BLOCK_SIZE = HEADERSIZE + FOOTERSIZE + SIZE_OF_ADDRESS; //min block size in bytes INCLUDING header and footer (so min block does not include a payload!)
 
 constexpr std::size_t OVERHEAD_SIZE = MIN_BLOCK_SIZE;
 
 //The min block size is supposed to be DWORD-aligned! Currently, it is assumed that SIZE_OF_ADDRESS is also DWORD-aligned! If not, the above needs to be changed!
 
+/*!
+ * \brief Returns a size >= the input size that is DWORD-aligned
+ * \param size
+ * \return
+ */
 [[nodiscard]] inline constexpr std::size_t align_size_to_DWORD(const std::size_t size)
 {
+    //TODO: Do I need to check for case of size < DSIZE specifically?
     std::size_t asize = 0;
     asize = DSIZE * ((size + (DSIZE-1)) / DSIZE);
     return asize;
 }
 
-//maximal block size in bytes. This is limited by the size field in the headers and footers. Currently those are 1 Word each. Includes size for header, footer and address of next block
-constexpr std::size_t MAX_BLOCK_SIZE = align_size_to_DWORD(UINT32_MAX - DSIZE);
-
 //Size of newly allocated slabs of memory by mmap
-constexpr std::size_t SLAB_SIZE = MAX_BLOCK_SIZE;
+constexpr std::size_t SLAB_SIZE = align_size_to_DWORD(UINT32_MAX - DSIZE);
 
-constexpr std::size_t MAX_BLOCK_ORDER = ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE);
+constexpr std::size_t LEFT_BOUNDARY_SIZE = OVERHEAD_SIZE + WSIZE;
+
+constexpr std::size_t ADMIN_OVERHEAD_SIZE = LEFT_BOUNDARY_SIZE + HEADERSIZE; //size of padding, left boundary and right boundary of a slab together
+
+//maximal block size in bytes. This is limited by the size field in the headers and footers. Currently those are 1 Word each. Includes size for header, footer and address of next block
+constexpr std::size_t MAX_BLOCK_SIZE = SLAB_SIZE - ADMIN_OVERHEAD_SIZE;
+
+//Gives index in Freelists array for the size group that asize fits into
+[[nodiscard]] static constexpr std::size_t blocksize_to_freelist_idx(std::size_t asize)
+{
+    assert(asize <= MAX_BLOCK_SIZE);
+
+    unsigned int reduced_log_idx = dtools::ceillog2(asize /  MIN_BLOCK_SIZE);
+
+    return reduced_log_idx;
+}
+
+//Gives size of size group for idx in Freelist array
+[[nodiscard]] static constexpr std::size_t freelist_idx_to_blocksize(std::size_t idx)
+{
+    return MIN_BLOCK_SIZE << idx;
+}
+
+//If this is changed, also change blocksize_to_idx and idx_to_blocksize in MyAlloc. Not very good design...
+constexpr std::size_t MAX_BLOCK_ORDER = dtools::ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE);
 
 
-/*
- * Structure of the explicit free lists:
- * HEADER (1 WORD)
- * NEXTBLK (size of an address)
- * FOOTER(1 WORD)
- *
- *
- * */
+
 
 
 /*!
@@ -78,7 +103,6 @@ private:
     [[nodiscard]] void* mem_map_slab();
 
     void mem_unmap_slab(void *start_of_slab);
-
 
     int mm_request_more_memory();
 
@@ -109,11 +133,13 @@ private:
         *(reinterpret_cast<DWORD*> (p)) = reinterpret_cast<DWORD>(val);
     }
 
-    /* Read the size and allocated fields from address p */
+    /* Read the size and allocated fields from address p
+       The rightmost 3 bits are reserved for flags, by virtue of the size being DWORD aligned.*/
     template<typename PTR>
     [[nodiscard]] WORD GET_SIZE(PTR p)
     {
-        return GET(p) & ~0x7;
+        std::size_t retval = GET(p) & ~0x7;
+        return retval;
     }
 
     //get allocated bit of ptr p (should be hdr or ftr pointer)
@@ -178,34 +204,20 @@ private:
         return reinterpret_cast<BYTE*>(HDRP(bp)) - prev_blk_size + HEADERSIZE;
     }
 
-
-    /*!
- * \brief finds a fitting block with a free payload size of at least asize - might be more.
- * \param asize
- * \return a pointer to the beginning of the payload block or nullptr
- */
     [[nodiscard]] void* find_fit(std::size_t asize);
 
-    /*!
-     * \brief Finds a fitting block in the explicit free list given by ptr. Returns nullptr if no suitable block with payload size >= asize was found.
-     * \param ptr
-     * \return
-     */
     BYTE* find_fit_in_list(BYTE* ptr, std::size_t asize);
 
-    /*!
-     * \brief "places" or reserves contents of size asize in the block given by bp. Splits bp down as far as possible while doing so.
-     * \param bp
-     * \param asize
-     */
     void place(void *const bp, std::size_t asize);
 
     [[nodiscard]] void* coalesce(void *bp);
 
     [[nodiscard]] BYTE* find_previous_block(void *bp);
 
-    [[nodiscard]] constexpr std::size_t blocksize_to_freelist_idx(std::size_t asize) const; //Gives index in mFreelists array for the size group that asize fits into
-    [[nodiscard]] constexpr std::size_t freelist_idx_to_blocksize(std::size_t idx) const; //Gives size of size group for idx in mFreelist array
+    [[nodiscard]] void* get_slab_for_block(void *blockpointer);
+    void unmap_slab_if_unused(void *slab_ptr);
+
+
 
     void remove_from_freelist(BYTE* bptr); //Remove block with block pointer bptr from the free list given by idx in mFreelists
 
@@ -213,4 +225,21 @@ private:
 
     std::array<BYTE*, MAX_HEAP / SLAB_SIZE> m_slab_list{}; //List of pointers to first byte of every newly mapped slab of memory. Used for unmapping during coalescing.
     std::array<BYTE*, MAX_HEAP / SLAB_SIZE>::size_type m_slab_list_top_idx{0};
+
+
+    int consecutive_frees{0};
+    unsigned int total_frees{0};
+    static constexpr int CHECK_UNMAP_CONSEQ_NUM = 10;
+    static constexpr int CHECK_UNMAP_TOTAL_NUM = 100;
 };
+
+//Free functions internally use the singleton-object
+[[nodiscard]] inline void* mm_malloc(std::size_t size)
+{
+    return MyAlloc::get_object()->malloc(size);
+}
+
+inline void mm_free(void *ptr)
+{
+    MyAlloc::get_object()->free(ptr);
+}
