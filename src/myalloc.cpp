@@ -372,7 +372,7 @@ void MyAlloc::remove_from_freelist(BYTE* bptr)
  * \param bp
  * \return
  */
-BYTE* MyAlloc::find_previous_block(void *bp)
+BYTE* MyAlloc::find_previous_block(void *bp) const
 {
     std::size_t idx = blocksize_to_freelist_idx(GET_SIZE(HDRP(bp)));
     BYTE *currptr = m_free_lists.at(idx);

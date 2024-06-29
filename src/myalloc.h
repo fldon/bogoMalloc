@@ -107,7 +107,7 @@ private:
     int mm_request_more_memory();
 
     /*Pack a size and allocated bit into a word*/
-    [[nodiscard]] inline WORD PACK(WORD size, WORD alloc)
+    [[nodiscard]] static WORD PACK(WORD size, WORD alloc)
     {
         assert(!(size & 0x7) && size % DSIZE == 0); //size needs to be DWORD aligned (which also means it needs to be at least DSIZE)
         WORD result = size | alloc;
@@ -116,19 +116,19 @@ private:
 
     /* Read a word at address p */
     template<typename ptr>
-    [[nodiscard]] WORD GET(ptr p)
+    [[nodiscard]] static WORD GET(const ptr &p)
     {
         return *reinterpret_cast<WORD*> (p);
     }
 
     template<typename ptr, typename T>
-    void PUT_WORD(ptr p, T val)
+    static void PUT_WORD(ptr p, T val)
     {
         *(reinterpret_cast<WORD*> (p)) = val;
     }
 
     template<typename ptr, typename T>
-    void PUT_ADDRESS(ptr p, T val)
+    static void PUT_ADDRESS(ptr p, T val)
     {
         *(reinterpret_cast<DWORD*> (p)) = reinterpret_cast<DWORD>(val);
     }
@@ -136,7 +136,7 @@ private:
     /* Read the size and allocated fields from address p
        The rightmost 3 bits are reserved for flags, by virtue of the size being DWORD aligned.*/
     template<typename PTR>
-    [[nodiscard]] WORD GET_SIZE(PTR p)
+    [[nodiscard]] static WORD GET_SIZE(const PTR &p)
     {
         std::size_t retval = GET(p) & ~0x7;
         return retval;
@@ -144,27 +144,27 @@ private:
 
     //get allocated bit of ptr p (should be hdr or ftr pointer)
     template<typename PTR>
-    [[nodiscard]] WORD GET_ALLOC(PTR p)
+    [[nodiscard]] static WORD GET_ALLOC(const PTR &p)
     {
         return GET(p) & 0x1;
     }
 
     /* Given block ptr bp, compute address of its header and footer*/
     template<typename PTR>
-    [[nodiscard]] BYTE* HDRP(PTR bp)
+    [[nodiscard]] static BYTE* HDRP(const PTR &bp)
     {
         return reinterpret_cast<BYTE*>(bp) - HEADERSIZE;
     }
 
     template<typename PTR>
-    [[nodiscard]] BYTE* FTRP(PTR bp)
+    [[nodiscard]] static BYTE* FTRP(const PTR &bp)
     {
         return reinterpret_cast<BYTE*>(bp) + GET_SIZE(HDRP(bp)) - HEADERSIZE - FOOTERSIZE;
     }
 
     // Given block ptr bp, compute address of next block in the explicit free list
     template<typename PTR>
-    [[nodiscard]] BYTE* NEXT_BLKP(PTR bp)
+    [[nodiscard]] static BYTE* NEXT_BLKP(const PTR &bp)
     {
         //Only free blocks have a next block!
         assert(!GET_ALLOC(HDRP(bp)));
@@ -180,7 +180,7 @@ private:
      * \return
      */
     template<typename PTR>
-    [[nodiscard]] BYTE* NEXT_BLKP_IMPL(PTR bp)
+    [[nodiscard]] static BYTE* NEXT_BLKP_IMPL(const PTR &bp)
     {
         std::size_t blocksize = GET_SIZE(HDRP(bp));
 
@@ -198,7 +198,7 @@ private:
      * \return
      */
     template<typename PTR>
-    [[nodiscard]] BYTE* PREV_BLKP_IMPL(PTR bp)
+    [[nodiscard]] static BYTE* PREV_BLKP_IMPL(const PTR &bp)
     {
         std::size_t prev_blk_size = GET_SIZE(reinterpret_cast<BYTE*>(HDRP(bp)) - FOOTERSIZE); //get size from footer
         return reinterpret_cast<BYTE*>(HDRP(bp)) - prev_blk_size + HEADERSIZE;
@@ -212,7 +212,7 @@ private:
 
     [[nodiscard]] void* coalesce(void *bp);
 
-    [[nodiscard]] BYTE* find_previous_block(void *bp);
+    [[nodiscard]] BYTE* find_previous_block(void *bp) const;
 
     [[nodiscard]] void* get_slab_for_block(void *blockpointer);
     void unmap_slab_if_unused(void *slab_ptr);
