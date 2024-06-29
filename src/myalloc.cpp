@@ -97,18 +97,15 @@ void *MyAlloc::find_fit(std::size_t asize)
     //if found: return pointer to the data block of the block with that header
     BYTE *ret = nullptr;
 
-    //go through freelists and check:
+    //go through freelists and check:s
     //1. if the size class of that list is large enough
-    for(std::size_t i = 0; i < m_free_lists.size(); ++i)
+    for(std::size_t i = blocksize_to_freelist_idx(asize); i < m_free_lists.size(); ++i)
     {
-        if(freelist_idx_to_blocksize(i) >= asize) //Is size class big enough to fit asize?
+        //2. go through that list if the size class and see if a fit can be found in that specific explicit free list
+        ret = find_fit_in_list(m_free_lists.at(i), asize);
+        if(ret != nullptr)
         {
-            //2. go through that list if the size class and see if a fit can be found in that specific explicit free list
-            ret = find_fit_in_list(m_free_lists.at(i), asize);
-            if(ret != nullptr)
-            {
-                return ret;
-            }
+            return ret;
         }
     }
     return ret;

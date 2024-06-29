@@ -67,9 +67,9 @@ constexpr std::size_t MAX_BLOCK_SIZE = SLAB_SIZE - ADMIN_OVERHEAD_SIZE;
 {
     assert(asize <= MAX_BLOCK_SIZE);
 
-    unsigned int reduced_log_idx = dtools::ceillog2(asize /  MIN_BLOCK_SIZE);
+    unsigned int idx = dtools::ceillog2(asize /  MIN_BLOCK_SIZE);
 
-    return reduced_log_idx;
+    return idx;
 }
 
 //Gives size of size group for idx in Freelist array
@@ -79,7 +79,7 @@ constexpr std::size_t MAX_BLOCK_SIZE = SLAB_SIZE - ADMIN_OVERHEAD_SIZE;
 }
 
 //If this is changed, also change blocksize_to_idx and idx_to_blocksize in MyAlloc. Not very good design...
-constexpr std::size_t MAX_BLOCK_ORDER = dtools::ceillog2(MAX_BLOCK_SIZE / MIN_BLOCK_SIZE);
+constexpr std::size_t MAX_BLOCK_ORDER = blocksize_to_freelist_idx(MAX_BLOCK_SIZE);
 
 
 
