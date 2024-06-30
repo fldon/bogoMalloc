@@ -140,6 +140,9 @@ private:
     [[nodiscard]] static WORD GET_SIZE(const PTR &p)
     {
         std::size_t retval = GET(p) & ~0x7;
+
+        assert(retval >= MIN_BLOCK_SIZE);
+
         return retval;
     }
 
@@ -154,7 +157,8 @@ private:
     template<typename PTR>
     [[nodiscard]] static BYTE* HDRP(const PTR &bp)
     {
-        return reinterpret_cast<BYTE*>(bp) - HEADERSIZE;
+        BYTE* retval = reinterpret_cast<BYTE*>(bp) - HEADERSIZE;
+        return retval;
     }
 
     template<typename PTR>
@@ -242,8 +246,11 @@ private:
     std::size_t m_last_freed_idx{0};
     int consecutive_frees{0};
     unsigned int total_frees{0};
+    bool m_coalesce_flag{false};
+
+    static constexpr int COALESCE_NUM = 20;
     static constexpr int CHECK_UNMAP_CONSEQ_NUM = 10;
-    static constexpr int CHECK_UNMAP_TOTAL_NUM = 200;
+    static constexpr int CHECK_UNMAP_TOTAL_NUM = 300;
 };
 
 //Free functions internally use the singleton-object

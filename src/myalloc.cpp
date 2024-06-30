@@ -170,7 +170,7 @@ void MyAlloc::place(void *const bp, std::size_t asize)
     //check if remainder of size after placing asize is larger or equal to min block size
     //If not: Do nothing
     //If yes: change Size in header, create extra footer block for first block, create extra header block and address block for second block, change size in footer of second block
-    if(non_split_size >= asize + OVERHEAD_SIZE)
+    if(non_split_size >= asize + MIN_BLOCK_SIZE)
     {
         //split asize and bsize, so that both are DWORD aligned and at least min size
         //for this, we need to check:
@@ -189,7 +189,7 @@ void MyAlloc::place(void *const bp, std::size_t asize)
         PUT_WORD(FTRP(bp), PACK(asize, 1)); //footer of first block with asize-size
 
         //sanity check
-        assert(GET_SIZE(HDRP(bp)) == asize);
+        assert(GET_SIZE(HDRP(bp)) == asize && GET_SIZE(FTRP(bp)) == GET_SIZE(HDRP(bp)));
 
         //Split off free block to the right
         //BYTE* splitblockp = reinterpret_cast<BYTE*>(HDRP(bp) + GET_SIZE(HDRP(bp)) + HEADERSIZE);
@@ -198,10 +198,10 @@ void MyAlloc::place(void *const bp, std::size_t asize)
         PUT_WORD(HDRP(splitblockp), PACK(bsize,0)); //Header of split block
         PUT_ADDRESS(HDRP(splitblockp) + HEADERSIZE, prevtop_b); //next Address block of split block
         PUT_ADDRESS(HDRP(splitblockp) + HEADERSIZE + SIZE_OF_ADDRESS, nullptr); //address of nonexistant previous block
-        PUT_WORD(HDRP(splitblockp) + HEADERSIZE + SIZE_OF_ADDRESS, PACK(bsize, 0)); //Footer of split block
+        PUT_WORD(FTRP(splitblockp), PACK(bsize, 0)); //Footer of split block
 
 
-        assert(NEXT_BLKP_IMPL(bp) ==  splitblockp);
+        assert(NEXT_BLKP_IMPL(bp) ==  splitblockp && GET_SIZE(FTRP(splitblockp)) == GET_SIZE(HDRP(splitblockp)));
 
         if(prevtop_b != nullptr)
         {
@@ -242,6 +242,12 @@ void* MyAlloc::malloc(std::size_t size)
 
     /*Search the free lists for a fit */
     retp = find_fit(asize);
+
+    if(retp == nullptr)
+    {
+        m_coalesce_flag = true;
+    }
+
     if(retp != nullptr)
     {
         place(retp, asize);
@@ -268,14 +274,21 @@ void* MyAlloc::malloc(std::size_t size)
  */
 void MyAlloc::free(void *bp)
 {
+    assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
+
     //set header and footer to size of block and alloc bit set to 0:
     std::size_t size = GET_SIZE(HDRP(bp));
     PUT_WORD(HDRP(bp), PACK(size, 0));
     PUT_WORD(FTRP(bp), PACK(size, 0));
 
     //Coalesce as far as possible
-    //if((total_frees % CHECK_UNMAP_TOTAL_NUM == 0) || consecutive_frees % CHECK_UNMAP_CONSEQ_NUM == 0)
-    bp = coalesce(bp);
+    if(m_coalesce_flag || total_frees % COALESCE_NUM == 0)
+    {
+        bp = coalesce(bp);
+        m_coalesce_flag = false;
+    }
+
+    assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
 
     //insert newly-freed block into correct explicit free list, and insert correct address block into freed block
     BYTE* prevtop = m_free_lists.at(blocksize_to_freelist_idx(GET_SIZE(HDRP(bp))));
@@ -309,53 +322,73 @@ void MyAlloc::free(void *bp)
  */
 void* MyAlloc::coalesce(void *bp)
 {
+    assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
     //Coalesce blocks left and right according to the 4 cases in the book
     //However, the header of the resulting block must be followed by an (empty) address block
-    WORD prev_alloc = GET_ALLOC(HDRP(PREV_BLKP_IMPL(bp)));
-    WORD next_alloc = GET_ALLOC(HDRP(NEXT_BLKP_IMPL(bp)));
-    std::size_t size = GET_SIZE(HDRP(bp));
-
-    if(prev_alloc && next_alloc) //case 1, no coalescing possible
+    WORD prev_alloc = 0;
+    WORD next_alloc = 0;
+    std::size_t size = 0;
+    while(!prev_alloc || !next_alloc)
     {
-        return bp;
-    }
+        assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
 
-    if (prev_alloc && !next_alloc) //case 2, right block coalesced
-    {
-        //remove right free block from the correct free list
         BYTE *right_block = reinterpret_cast<BYTE*>(NEXT_BLKP_IMPL(bp));
-        remove_from_freelist(right_block);
+        BYTE *left_block = reinterpret_cast<BYTE*>(PREV_BLKP_IMPL(bp));
 
-        //Change sizes in header and footer
-        size += GET_SIZE(HDRP(NEXT_BLKP_IMPL(bp)));
-        PUT_WORD(HDRP(bp), PACK(size, 0));
-        PUT_WORD(FTRP(bp), PACK(size, 0));
-    }
+        prev_alloc = GET_ALLOC(HDRP(left_block));
+        next_alloc = GET_ALLOC(HDRP(right_block));
+        size = GET_SIZE(HDRP(bp));
 
-    else if (!prev_alloc && next_alloc) //case 3, left block coalesced
-    {
-        //remove left free block from the correct free list
-        remove_from_freelist(reinterpret_cast<BYTE*>(PREV_BLKP_IMPL(bp)));
+        if(prev_alloc && next_alloc) //case 1, no coalescing possible
+        {
+            return bp;
+        }
 
-        //Move bp to start of left block, and change sizes in header and footer
-        size += GET_SIZE(HDRP(PREV_BLKP_IMPL(bp)));
-        PUT_WORD(FTRP(bp), PACK(size, 0));
-        PUT_WORD(HDRP(PREV_BLKP_IMPL(bp)), PACK(size, 0));
-        bp = PREV_BLKP_IMPL(bp); //This still works at this point because the left footer wasn't touched
-    }
+        if (prev_alloc && !next_alloc) //case 2, right block coalesced
+        {
+            //remove right free block from the correct free list
+            remove_from_freelist(right_block);
 
-    else //case 4
-    {
-        //remove left and right free block from the correct free list
-        remove_from_freelist(reinterpret_cast<BYTE*>(NEXT_BLKP_IMPL(bp)));
-        remove_from_freelist(reinterpret_cast<BYTE*>(PREV_BLKP_IMPL(bp)));
+            //Change sizes in header and footer
+            size += GET_SIZE(HDRP(right_block));
+            PUT_WORD(HDRP(bp), PACK(size, 0));
+            PUT_WORD(FTRP(bp), PACK(size, 0));
 
-        size += GET_SIZE(HDRP(NEXT_BLKP_IMPL(bp)))
-                + GET_SIZE(HDRP(PREV_BLKP_IMPL(bp)));
-        //Move bp to start of left block, and use footer of right block
-        PUT_WORD(HDRP(PREV_BLKP_IMPL(bp)), PACK(size, 0));
-        PUT_WORD(FTRP(NEXT_BLKP_IMPL(bp)), PACK(size, 0));
-        bp = PREV_BLKP_IMPL(bp); //This still works at this point because the left footer wasn't touched
+            assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
+        }
+
+        else if (!prev_alloc && next_alloc) //case 3, left block coalesced
+        {
+            //remove left free block from the correct free list
+            remove_from_freelist(left_block);
+
+            //Move bp to start of left block, and change sizes in header and footer
+            size += GET_SIZE(HDRP(left_block));
+            bp = left_block; //This still works at this point because the left footer wasn't touched
+
+            PUT_WORD(HDRP(bp), PACK(size, 0));
+            PUT_WORD(FTRP(bp), PACK(size, 0));
+
+            assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
+        }
+
+        else //case 4
+        {
+            //remove left and right free block from the correct free list
+            remove_from_freelist(right_block);
+            remove_from_freelist(left_block);
+
+            size += GET_SIZE(HDRP(right_block))
+                    + GET_SIZE(HDRP(left_block));
+
+            //Move bp to start of left block, and use footer of right block
+            bp = left_block; //This still works at this point because the left footer wasn't touched
+            PUT_WORD(HDRP(bp), PACK(size, 0));
+            PUT_WORD(FTRP(bp), PACK(size, 0));
+
+            assert(GET_SIZE(HDRP(bp)) == GET_SIZE(FTRP(bp)));
+
+        }
     }
     return bp;
 }

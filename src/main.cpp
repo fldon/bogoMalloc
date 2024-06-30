@@ -8,7 +8,7 @@ using namespace std;
 
 int main()
 {
-    constexpr std::size_t NUM_OF_ALLOCS_TO_TEST = 300000;
+    constexpr std::size_t NUM_OF_ALLOCS_TO_TEST = 150000;
     constexpr int MAX_MALLOC_SIZE = 61440;
     constexpr int NUM_OF_TESTS = 1000;
 
@@ -64,7 +64,6 @@ int main()
         total_seconds_myfree += elapsed_seconds_free;
     }
 
-    /*
     //test malloc
     for(int i = 0; i < NUM_OF_TESTS; ++i)
     {
@@ -97,7 +96,7 @@ int main()
 
         const std::chrono::duration<double> elapsed_seconds_free{endFree - startFree};
         total_seconds_free += elapsed_seconds_free;
-    }*/
+    }
 
     std::cout << "Memory usage at full allocation(resident set): " << "MyAlloc: " << resident_set_myalloc << "\n";
     std::cout << "Memory usage at full allocation(virtual memory): " << "MyAlloc: " << vm_usage_myalloc << "\n";
