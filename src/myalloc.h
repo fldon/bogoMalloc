@@ -11,6 +11,7 @@ All memory blocks are DWORD-aligned */
  * Structure of the explicit free lists:
  * HEADER (1 WORD)
  * NEXTBLK (SIZE_OF_ADDRESS)
+ * PREVBLK (SIZE_OF_ADDRESS)
  * FOOTER(1 WORD)
  *
  *
@@ -33,7 +34,7 @@ constexpr std::size_t FOOTERSIZE = HEADERSIZE;
 
 constexpr long long SIZE_OF_ADDRESS = sizeof(intptr_t); //size of addresses in bytes
 
-constexpr std::size_t MIN_BLOCK_SIZE = HEADERSIZE + FOOTERSIZE + SIZE_OF_ADDRESS; //min block size in bytes INCLUDING header and footer (so min block does not include a payload!)
+constexpr std::size_t MIN_BLOCK_SIZE = HEADERSIZE + FOOTERSIZE + 2 * SIZE_OF_ADDRESS; //min block size in bytes INCLUDING header and footer (so min block does not include a payload!)
 
 constexpr std::size_t OVERHEAD_SIZE = MIN_BLOCK_SIZE;
 
@@ -174,6 +175,18 @@ private:
         return retval;
     }
 
+    //Given block ptr bp, compute address of previous block in explicit free list
+    template<typename PTR>
+    [[nodiscard]] static BYTE* PREV_BLKP(const PTR &bp)
+    {
+        //Only free blocks have previous block!
+        assert(!GET_ALLOC(HDRP(bp)));
+
+        //Address of previous block starts after header and next_address
+        BYTE *retval = *reinterpret_cast<BYTE* *> (HDRP(bp) + HEADERSIZE + SIZE_OF_ADDRESS);
+        return retval;
+    }
+
     /*!
      * \brief Given block ptr bp, compute address of next block in virtual address space. That block does not need to be in the explicit lists
      * \param bp
@@ -226,11 +239,11 @@ private:
     std::array<BYTE*, MAX_HEAP / SLAB_SIZE> m_slab_list{}; //List of pointers to first byte of every newly mapped slab of memory. Used for unmapping during coalescing.
     std::array<BYTE*, MAX_HEAP / SLAB_SIZE>::size_type m_slab_list_top_idx{0};
 
-
+    std::size_t m_last_freed_idx{0};
     int consecutive_frees{0};
     unsigned int total_frees{0};
     static constexpr int CHECK_UNMAP_CONSEQ_NUM = 10;
-    static constexpr int CHECK_UNMAP_TOTAL_NUM = 100;
+    static constexpr int CHECK_UNMAP_TOTAL_NUM = 200;
 };
 
 //Free functions internally use the singleton-object

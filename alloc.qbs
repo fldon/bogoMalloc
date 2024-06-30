@@ -10,4 +10,6 @@ CppApplication {
     "src/myalloc.h",
     "src/myalloc.cpp",
     ]
+
+    //cpp.commonCompilerFlags: ["-O3"]
 }
